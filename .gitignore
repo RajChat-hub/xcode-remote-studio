@@ -1,0 +1,21 @@
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# Xcode
+*.xcuserstate
+*.xcuserdatad
+DerivedData/
+build/
+
+# Node
+node_modules/
+
+# Logs
+*.log
+cloudflared.log
+
+# IDE
+.vscode/
+.idea/

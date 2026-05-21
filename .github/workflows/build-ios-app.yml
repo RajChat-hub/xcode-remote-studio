@@ -1,0 +1,180 @@
+# =============================================================================
+# iOS App Builder - GitHub Actions Workflow
+# =============================================================================
+# Dedicated workflow for building iOS apps from the repository.
+# Can be triggered manually or from the remote session.
+# =============================================================================
+
+name: 📱 Build iOS App
+
+on:
+  workflow_dispatch:
+    inputs:
+      project_path:
+        description: 'Path to .xcodeproj or .xcworkspace'
+        required: true
+        type: string
+      scheme:
+        description: 'Build scheme name'
+        required: true
+        type: string
+      platform:
+        description: 'Target platform'
+        required: true
+        default: 'iOS Simulator'
+        type: choice
+        options:
+          - 'iOS Simulator'
+          - 'macOS'
+          - 'watchOS Simulator'
+          - 'tvOS Simulator'
+      device:
+        description: 'Simulator device'
+        required: true
+        default: 'iPhone 16 Pro'
+        type: choice
+        options:
+          - 'iPhone 16 Pro'
+          - 'iPhone 16 Pro Max'
+          - 'iPhone 16'
+          - 'iPhone 15 Pro'
+          - 'iPad Pro (12.9-inch) (6th generation)'
+          - 'iPad Air (5th generation)'
+      ios_version:
+        description: 'iOS version for simulator'
+        required: true
+        default: '18.2'
+        type: string
+      build_configuration:
+        description: 'Build configuration'
+        required: true
+        default: 'Debug'
+        type: choice
+        options:
+          - 'Debug'
+          - 'Release'
+
+jobs:
+  build:
+    name: 🏗️ Build & Test
+    runs-on: macos-14
+    
+    steps:
+      - name: 📦 Checkout
+        uses: actions/checkout@v4
+
+      - name: 🔧 Setup Xcode
+        run: |
+          xcodebuild -version
+          xcrun simctl list devices available
+
+      - name: 📱 Create Simulator
+        run: |
+          DEVICE="${{ github.event.inputs.device }}"
+          IOS_VERSION="${{ github.event.inputs.ios_version }}"
+          
+          # Find the runtime
+          RUNTIME=$(xcrun simctl list runtimes | grep "iOS $IOS_VERSION" | tail -1 | awk '{print $NF}')
+          
+          if [ -z "$RUNTIME" ]; then
+            echo "⚠️ iOS $IOS_VERSION runtime not found, using latest available:"
+            xcrun simctl list runtimes
+            RUNTIME=$(xcrun simctl list runtimes | grep "iOS" | tail -1 | awk '{print $NF}')
+          fi
+          
+          echo "Using runtime: $RUNTIME"
+          
+          # Boot a simulator
+          DEVICE_ID=$(xcrun simctl list devices available | grep "$DEVICE" | head -1 | grep -o '[A-F0-9-]\{36\}')
+          
+          if [ -n "$DEVICE_ID" ]; then
+            xcrun simctl boot "$DEVICE_ID" 2>/dev/null || true
+            echo "✅ Booted simulator: $DEVICE ($DEVICE_ID)"
+          else
+            echo "⚠️ Device '$DEVICE' not found, listing available:"
+            xcrun simctl list devices available
+          fi
+
+      - name: 🏗️ Build Project
+        run: |
+          PROJECT="${{ github.event.inputs.project_path }}"
+          SCHEME="${{ github.event.inputs.scheme }}"
+          CONFIG="${{ github.event.inputs.build_configuration }}"
+          DEVICE="${{ github.event.inputs.device }}"
+          
+          DESTINATION="platform=${{ github.event.inputs.platform }},name=$DEVICE"
+          
+          echo "🏗️ Building..."
+          echo "  Project: $PROJECT"
+          echo "  Scheme: $SCHEME"
+          echo "  Config: $CONFIG"
+          echo "  Destination: $DESTINATION"
+          echo ""
+          
+          if [[ "$PROJECT" == *.xcworkspace ]]; then
+            BUILD_FLAG="-workspace"
+          else
+            BUILD_FLAG="-project"
+          fi
+          
+          xcodebuild \
+            $BUILD_FLAG "$PROJECT" \
+            -scheme "$SCHEME" \
+            -configuration "$CONFIG" \
+            -destination "$DESTINATION" \
+            -resultBundlePath build/results \
+            clean build \
+            | tee build/build.log
+          
+          echo "✅ Build completed!"
+
+      - name: 🧪 Run Tests
+        if: success()
+        continue-on-error: true
+        run: |
+          PROJECT="${{ github.event.inputs.project_path }}"
+          SCHEME="${{ github.event.inputs.scheme }}"
+          DEVICE="${{ github.event.inputs.device }}"
+          
+          DESTINATION="platform=${{ github.event.inputs.platform }},name=$DEVICE"
+          
+          if [[ "$PROJECT" == *.xcworkspace ]]; then
+            BUILD_FLAG="-workspace"
+          else
+            BUILD_FLAG="-project"
+          fi
+          
+          echo "🧪 Running tests..."
+          xcodebuild \
+            $BUILD_FLAG "$PROJECT" \
+            -scheme "$SCHEME" \
+            -destination "$DESTINATION" \
+            -resultBundlePath build/test-results \
+            test \
+            | tee build/test.log || true
+          
+          echo "✅ Tests completed!"
+
+      - name: 📤 Upload Build Artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-results-${{ github.run_number }}
+          path: |
+            build/
+            *.app
+          retention-days: 7
+
+      - name: 📊 Build Summary
+        if: always()
+        run: |
+          echo "## 📱 Build Results" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Property | Value |" >> $GITHUB_STEP_SUMMARY
+          echo "|----------|-------|" >> $GITHUB_STEP_SUMMARY
+          echo "| Project | \`${{ github.event.inputs.project_path }}\` |" >> $GITHUB_STEP_SUMMARY
+          echo "| Scheme | \`${{ github.event.inputs.scheme }}\` |" >> $GITHUB_STEP_SUMMARY
+          echo "| Platform | ${{ github.event.inputs.platform }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Device | ${{ github.event.inputs.device }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Configuration | ${{ github.event.inputs.build_configuration }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Xcode | $(xcodebuild -version | head -1) |" >> $GITHUB_STEP_SUMMARY

@@ -1,0 +1,425 @@
+# =============================================================================
+# macOS Xcode Remote Studio - GitHub Actions Workflow
+# =============================================================================
+# This workflow provisions a macOS runner with Xcode, sets up a VNC server
+# with noVNC web interface, and exposes it via Cloudflare Tunnel so you can
+# build and control iOS/macOS apps from any browser.
+# =============================================================================
+
+name: 🖥️ Xcode Remote Studio
+
+on:
+  workflow_dispatch:
+    inputs:
+      session_duration:
+        description: 'Session duration in hours (max 6)'
+        required: true
+        default: '4'
+        type: choice
+        options:
+          - '1'
+          - '2'
+          - '3'
+          - '4'
+          - '5'
+          - '6'
+      xcode_version:
+        description: 'Xcode version to use'
+        required: true
+        default: 'latest'
+        type: choice
+        options:
+          - 'latest'
+          - '16.2'
+          - '16.1'
+          - '16.0'
+          - '15.4'
+          - '15.3'
+      screen_resolution:
+        description: 'Virtual screen resolution'
+        required: true
+        default: '1920x1080'
+        type: choice
+        options:
+          - '1920x1080'
+          - '2560x1440'
+          - '1680x1050'
+          - '1440x900'
+      vnc_password:
+        description: 'VNC access password (min 6 chars)'
+        required: true
+        default: 'xcode123'
+        type: string
+      tunnel_token:
+        description: 'Cloudflare Tunnel token (from dashboard)'
+        required: false
+        type: string
+
+env:
+  NOVNC_PORT: 800
+  VNC_PORT: 5900
+  WEBSOCKIFY_PORT: 6080
+
+jobs:
+  xcode-remote-session:
+    name: 🍎 macOS Xcode Remote Session
+    runs-on: macos-14
+    timeout-minutes: 360
+
+    steps:
+      # =====================================================================
+      # Step 1: System Information & Xcode Setup
+      # =====================================================================
+      - name: 📋 Display System Information
+        run: |
+          echo "============================================"
+          echo "   🖥️  Xcode Remote Studio - Session Info"
+          echo "============================================"
+          echo ""
+          echo "🍎 macOS Version: $(sw_vers -productVersion)"
+          echo "🏗️  Build: $(sw_vers -buildVersion)"
+          echo "💻 Hardware: $(sysctl -n hw.model 2>/dev/null || echo 'VM')"
+          echo "🧠 CPU: $(sysctl -n machdep.cpu.brand_string)"
+          echo "💾 RAM: $(( $(sysctl -n hw.memsize) / 1073741824 )) GB"
+          echo "💿 Disk: $(df -h / | tail -1 | awk '{print $4}') free"
+          echo "⏱️  Session Duration: ${{ github.event.inputs.session_duration }} hours"
+          echo "📐 Resolution: ${{ github.event.inputs.screen_resolution }}"
+          echo ""
+          echo "============================================"
+
+      - name: 📦 Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: 🔧 Select Xcode Version
+        run: |
+          if [ "${{ github.event.inputs.xcode_version }}" = "latest" ]; then
+            echo "Using default (latest) Xcode installation"
+            xcode-select -p
+          else
+            XCODE_PATH="/Applications/Xcode_${{ github.event.inputs.xcode_version }}.app"
+            if [ -d "$XCODE_PATH" ]; then
+              sudo xcode-select -s "$XCODE_PATH"
+              echo "✅ Switched to Xcode ${{ github.event.inputs.xcode_version }}"
+            else
+              echo "⚠️ Xcode ${{ github.event.inputs.xcode_version }} not found, listing available:"
+              ls /Applications/ | grep Xcode
+              echo "Using default Xcode installation"
+            fi
+          fi
+          echo ""
+          echo "📱 Active Xcode: $(xcodebuild -version)"
+          echo "📍 Path: $(xcode-select -p)"
+
+      # =====================================================================
+      # Step 2: Install Dependencies
+      # =====================================================================
+      - name: 📥 Install Homebrew Dependencies
+        run: |
+          echo "📥 Installing required packages..."
+          brew install --quiet node websockify
+
+      - name: 📥 Install noVNC
+        run: |
+          echo "📥 Setting up noVNC web client..."
+          cd $HOME
+          git clone --depth 1 https://github.com/novnc/noVNC.git
+          echo "✅ noVNC installed at $HOME/noVNC"
+
+      - name: 📥 Install Cloudflare Tunnel
+        run: |
+          echo "📥 Installing cloudflared..."
+          brew install --quiet cloudflare/cloudflare/cloudflared
+          cloudflared --version
+          echo "✅ cloudflared installed"
+
+      # =====================================================================
+      # Step 3: Configure VNC Server
+      # =====================================================================
+      - name: 🖥️ Configure macOS Screen Sharing (VNC)
+        run: |
+          echo "🖥️ Configuring VNC server..."
+          
+          # Set VNC password
+          VNC_PASS="${{ github.event.inputs.vnc_password }}"
+          
+          # Enable Screen Sharing via kickstart
+          sudo /System/Library/CoreServices/RemoteManagement/ARDAgent.app/Contents/Resources/kickstart \
+            -activate \
+            -configure -access -on \
+            -configure -allowAccessFor -allUsers \
+            -configure -restart -agent -privs -all \
+            -configure -clientopts -setvnclegacy -vnclegacy yes \
+            -configure -clientopts -setvncpw -vncpw "$VNC_PASS" \
+            || echo "⚠️ ARD kickstart had issues, trying alternate method..."
+          
+          # Also try setting VNC password via defaults
+          echo "$VNC_PASS" | sudo /usr/bin/dscl . -passwd /Users/runner "$VNC_PASS" 2>/dev/null || true
+          
+          # Enable VNC via System Preferences scripting
+          sudo defaults write /var/db/launchd.db/com.apple.launchd/overrides.plist \
+            com.apple.screensharing -dict Disabled -bool false 2>/dev/null || true
+          
+          sudo launchctl load -w /System/Library/LaunchDaemons/com.apple.screensharing.plist 2>/dev/null || true
+          
+          echo "✅ VNC server configured on port $VNC_PORT"
+
+      - name: 📐 Set Screen Resolution
+        run: |
+          RESOLUTION="${{ github.event.inputs.screen_resolution }}"
+          WIDTH=$(echo $RESOLUTION | cut -d'x' -f1)
+          HEIGHT=$(echo $RESOLUTION | cut -d'x' -f2)
+          
+          echo "📐 Setting resolution to ${WIDTH}x${HEIGHT}..."
+          
+          # Try to set resolution using screenresolution tool
+          brew install --quiet screenresolution 2>/dev/null || true
+          screenresolution set ${WIDTH}x${HEIGHT}x32 2>/dev/null || \
+            echo "⚠️ Resolution change requires physical display, using default VM resolution"
+          
+          echo "✅ Display configured"
+
+      # =====================================================================
+      # Step 4: Start Services
+      # =====================================================================
+      - name: 🌐 Start WebSocket Proxy (websockify)
+        run: |
+          echo "🌐 Starting websockify bridge..."
+          cd $HOME/noVNC
+          
+          # Start websockify to bridge WebSocket to VNC
+          ./utils/novnc_proxy \
+            --vnc localhost:$VNC_PORT \
+            --listen $NOVNC_PORT \
+            --web $HOME/noVNC \
+            &
+          
+          PROXY_PID=$!
+          echo "PROXY_PID=$PROXY_PID" >> $GITHUB_ENV
+          
+          # Wait for it to start
+          sleep 3
+          
+          # Verify
+          if curl -s -o /dev/null -w "%{http_code}" http://localhost:$NOVNC_PORT | grep -q "200\|301\|302"; then
+            echo "✅ noVNC web interface running on port $NOVNC_PORT"
+          else
+            echo "⚠️ noVNC may not be fully ready yet, continuing..."
+          fi
+
+      - name: 🔧 Copy Custom Web Dashboard
+        run: |
+          # Copy our custom dashboard files alongside noVNC
+          if [ -d "./web" ]; then
+            cp -r ./web/* $HOME/noVNC/ 2>/dev/null || true
+            echo "✅ Custom dashboard files deployed"
+          fi
+
+      # =====================================================================
+      # Step 5: Cloudflare Tunnel
+      # =====================================================================
+      - name: 🚇 Start Cloudflare Tunnel
+        run: |
+          echo "🚇 Starting Cloudflare Tunnel..."
+          
+          TUNNEL_TOKEN="${{ github.event.inputs.tunnel_token }}"
+          
+          if [ -n "$TUNNEL_TOKEN" ] && [ "$TUNNEL_TOKEN" != "" ]; then
+            echo "🔑 Using provided Cloudflare Tunnel token..."
+            cloudflared tunnel --no-autoupdate run --token "$TUNNEL_TOKEN" &
+            TUNNEL_PID=$!
+            echo "TUNNEL_PID=$TUNNEL_PID" >> $GITHUB_ENV
+            echo "✅ Named tunnel started with token"
+            echo ""
+            echo "============================================"
+            echo "🌐 Access via your configured tunnel domain"
+            echo "============================================"
+          else
+            echo "🆓 Starting quick tunnel (no token provided)..."
+            # Use Cloudflare Quick Tunnel (free, temporary URL)
+            cloudflared tunnel --no-autoupdate --url http://localhost:$NOVNC_PORT \
+              --logfile $HOME/cloudflared.log &
+            TUNNEL_PID=$!
+            echo "TUNNEL_PID=$TUNNEL_PID" >> $GITHUB_ENV
+            
+            # Wait for tunnel to establish and extract URL
+            echo "⏳ Waiting for tunnel URL..."
+            sleep 10
+            
+            for i in $(seq 1 30); do
+              TUNNEL_URL=$(grep -o 'https://[a-zA-Z0-9\-]*\.trycloudflare\.com' $HOME/cloudflared.log 2>/dev/null | head -1)
+              if [ -n "$TUNNEL_URL" ]; then
+                break
+              fi
+              sleep 2
+            done
+            
+            if [ -n "$TUNNEL_URL" ]; then
+              echo ""
+              echo "============================================"
+              echo "🎉 TUNNEL IS READY!"
+              echo "============================================"
+              echo ""
+              echo "🌐 Access URL: $TUNNEL_URL"
+              echo "🔑 VNC Password: ${{ github.event.inputs.vnc_password }}"
+              echo ""
+              echo "📱 Open the URL in your browser to access"
+              echo "   the macOS desktop with Xcode!"
+              echo ""
+              echo "============================================"
+              echo "TUNNEL_URL=$TUNNEL_URL" >> $GITHUB_ENV
+            else
+              echo "⚠️ Could not extract tunnel URL. Check logs:"
+              cat $HOME/cloudflared.log | tail -20
+            fi
+          fi
+
+      # =====================================================================
+      # Step 6: Launch Xcode & Setup Environment
+      # =====================================================================
+      - name: 🚀 Launch Xcode & Dev Environment
+        run: |
+          echo "🚀 Setting up development environment..."
+          
+          # Open Xcode
+          open -a Xcode &
+          
+          # Open Terminal
+          open -a Terminal &
+          
+          # Open Finder
+          open -a Finder &
+          
+          # Create a welcome workspace
+          mkdir -p $HOME/Desktop/XcodeProjects
+          
+          # Create a sample iOS project for quick start
+          cat > $HOME/Desktop/create_ios_project.sh << 'SCRIPT'
+          #!/bin/bash
+          echo "Creating new iOS project..."
+          PROJECT_NAME="${1:-MyiOSApp}"
+          cd $HOME/Desktop/XcodeProjects
+          
+          mkdir -p "$PROJECT_NAME/$PROJECT_NAME"
+          
+          # Create basic project structure
+          cat > "$PROJECT_NAME/$PROJECT_NAME/ContentView.swift" << 'SWIFT'
+          import SwiftUI
+          
+          struct ContentView: View {
+              var body: some View {
+                  VStack {
+                      Image(systemName: "globe")
+                          .imageScale(.large)
+                          .foregroundStyle(.tint)
+                      Text("Hello, World!")
+                  }
+                  .padding()
+              }
+          }
+          
+          #Preview {
+              ContentView()
+          }
+          SWIFT
+          
+          cat > "$PROJECT_NAME/$PROJECT_NAME/${PROJECT_NAME}App.swift" << SWIFT
+          import SwiftUI
+          
+          @main
+          struct ${PROJECT_NAME}App: App {
+              var body: some Scene {
+                  WindowGroup {
+                      ContentView()
+                  }
+              }
+          }
+          SWIFT
+          
+          echo "✅ Project '$PROJECT_NAME' created at $HOME/Desktop/XcodeProjects/$PROJECT_NAME"
+          echo "Open it in Xcode with: open $HOME/Desktop/XcodeProjects/$PROJECT_NAME"
+          SCRIPT
+          
+          chmod +x $HOME/Desktop/create_ios_project.sh
+          
+          echo "✅ Development environment ready"
+          echo "📁 Projects folder: $HOME/Desktop/XcodeProjects"
+          echo "📝 Quick create script: $HOME/Desktop/create_ios_project.sh"
+
+      # =====================================================================
+      # Step 7: Session Status & Keep Alive
+      # =====================================================================
+      - name: 📊 Display Session Summary
+        run: |
+          echo ""
+          echo "╔══════════════════════════════════════════════════════════╗"
+          echo "║        🖥️  Xcode Remote Studio - SESSION ACTIVE         ║"
+          echo "╠══════════════════════════════════════════════════════════╣"
+          echo "║                                                          ║"
+          echo "║  🌐 Tunnel URL: ${TUNNEL_URL:-'Check tunnel logs'}       ║"
+          echo "║  🔑 VNC Pass:   ${{ github.event.inputs.vnc_password }}  ║"
+          echo "║  📱 Xcode:      $(xcodebuild -version | head -1)        ║"
+          echo "║  🍎 macOS:      $(sw_vers -productVersion)              ║"
+          echo "║  📐 Resolution: ${{ github.event.inputs.screen_resolution }} ║"
+          echo "║  ⏱️  Duration:   ${{ github.event.inputs.session_duration }}h ║"
+          echo "║                                                          ║"
+          echo "║  📁 Projects:   ~/Desktop/XcodeProjects                  ║"
+          echo "║  📝 New Project: ~/Desktop/create_ios_project.sh         ║"
+          echo "║                                                          ║"
+          echo "╚══════════════════════════════════════════════════════════╝"
+          echo ""
+
+      - name: ⏳ Keep Session Alive
+        run: |
+          DURATION_HOURS=${{ github.event.inputs.session_duration }}
+          DURATION_SECONDS=$((DURATION_HOURS * 3600))
+          END_TIME=$(($(date +%s) + DURATION_SECONDS))
+          
+          echo "⏳ Session will remain active for $DURATION_HOURS hours"
+          echo "🕐 Session ends at: $(date -r $END_TIME '+%Y-%m-%d %H:%M:%S %Z')"
+          echo ""
+          
+          COUNTER=0
+          while [ $(date +%s) -lt $END_TIME ]; do
+            REMAINING=$(( (END_TIME - $(date +%s)) / 60 ))
+            
+            if [ $((COUNTER % 12)) -eq 0 ]; then
+              echo "[$(date '+%H:%M:%S')] 💚 Session active | ⏱️ ${REMAINING} min remaining | 🌐 ${TUNNEL_URL:-'tunnel active'}"
+            fi
+            
+            # Health checks every 5 minutes
+            if [ $((COUNTER % 1)) -eq 0 ]; then
+              # Check VNC
+              if ! pgrep -x "screensharingd" > /dev/null 2>&1; then
+                echo "[$(date '+%H:%M:%S')] ⚠️ VNC process not found, attempting restart..."
+                sudo launchctl load -w /System/Library/LaunchDaemons/com.apple.screensharing.plist 2>/dev/null || true
+              fi
+              
+              # Check cloudflared
+              if ! kill -0 $TUNNEL_PID 2>/dev/null; then
+                echo "[$(date '+%H:%M:%S')] ⚠️ Tunnel process died, attempting restart..."
+                cloudflared tunnel --no-autoupdate --url http://localhost:$NOVNC_PORT \
+                  --logfile $HOME/cloudflared.log &
+                TUNNEL_PID=$!
+              fi
+            fi
+            
+            COUNTER=$((COUNTER + 1))
+            sleep 300  # Check every 5 minutes
+          done
+          
+          echo ""
+          echo "⏰ Session duration expired. Shutting down..."
+          echo "👋 Thank you for using Xcode Remote Studio!"
+
+      # =====================================================================
+      # Step 8: Cleanup
+      # =====================================================================
+      - name: 🧹 Cleanup
+        if: always()
+        run: |
+          echo "🧹 Cleaning up..."
+          kill $TUNNEL_PID 2>/dev/null || true
+          kill $PROXY_PID 2>/dev/null || true
+          sudo /System/Library/CoreServices/RemoteManagement/ARDAgent.app/Contents/Resources/kickstart \
+            -deactivate -configure -access -off 2>/dev/null || true
+          echo "✅ Cleanup complete"

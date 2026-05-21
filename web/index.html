@@ -1,0 +1,302 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Xcode Remote Studio</title>
+    <meta name="description" content="Remote macOS Xcode development environment powered by GitHub Actions">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="dashboard.css">
+</head>
+<body>
+    <!-- Loading Overlay -->
+    <div class="loading-overlay" id="loadingOverlay">
+        <div class="loading-content">
+            <div class="apple-logo">
+                <svg viewBox="0 0 24 24" width="64" height="64" fill="currentColor">
+                    <path d="M18.71 19.5c-.83 1.24-1.71 2.45-3.05 2.47-1.34.03-1.77-.79-3.29-.79-1.53 0-2 .77-3.27.82-1.31.05-2.3-1.32-3.14-2.53C4.25 17 2.94 12.45 4.7 9.39c.87-1.52 2.43-2.48 4.12-2.51 1.28-.02 2.5.87 3.29.87.78 0 2.26-1.07 3.8-.91.65.03 2.47.26 3.64 1.98-.09.06-2.17 1.28-2.15 3.81.03 3.02 2.65 4.03 2.68 4.04-.03.07-.42 1.44-1.38 2.83M13 3.5c.73-.83 1.94-1.46 2.94-1.5.13 1.17-.34 2.35-1.04 3.19-.69.85-1.83 1.51-2.95 1.42-.15-1.15.41-2.35 1.05-3.11z"/>
+                </svg>
+            </div>
+            <h2>Xcode Remote Studio</h2>
+            <div class="loading-bar">
+                <div class="loading-progress"></div>
+            </div>
+            <p class="loading-text">Connecting to macOS session...</p>
+        </div>
+    </div>
+
+    <!-- Main Application -->
+    <div class="app" id="app">
+        <!-- Top Navigation Bar -->
+        <nav class="top-bar">
+            <div class="top-bar-left">
+                <div class="logo-mark">
+                    <svg viewBox="0 0 24 24" width="20" height="20" fill="currentColor">
+                        <path d="M18.71 19.5c-.83 1.24-1.71 2.45-3.05 2.47-1.34.03-1.77-.79-3.29-.79-1.53 0-2 .77-3.27.82-1.31.05-2.3-1.32-3.14-2.53C4.25 17 2.94 12.45 4.7 9.39c.87-1.52 2.43-2.48 4.12-2.51 1.28-.02 2.5.87 3.29.87.78 0 2.26-1.07 3.8-.91.65.03 2.47.26 3.64 1.98-.09.06-2.17 1.28-2.15 3.81.03 3.02 2.65 4.03 2.68 4.04-.03.07-.42 1.44-1.38 2.83M13 3.5c.73-.83 1.94-1.46 2.94-1.5.13 1.17-.34 2.35-1.04 3.19-.69.85-1.83 1.51-2.95 1.42-.15-1.15.41-2.35 1.05-3.11z"/>
+                    </svg>
+                </div>
+                <span class="app-title">Xcode Remote Studio</span>
+                <span class="session-badge" id="sessionBadge">
+                    <span class="pulse-dot"></span>
+                    Session Active
+                </span>
+            </div>
+            <div class="top-bar-center">
+                <button class="tab-btn active" data-tab="desktop" id="tabDesktop">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="3" width="20" height="14" rx="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/></svg>
+                    Desktop
+                </button>
+                <button class="tab-btn" data-tab="terminal" id="tabTerminal">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="4 17 10 11 4 5"/><line x1="12" y1="19" x2="20" y2="19"/></svg>
+                    Terminal
+                </button>
+                <button class="tab-btn" data-tab="files" id="tabFiles">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>
+                    Files
+                </button>
+                <button class="tab-btn" data-tab="build" id="tabBuild">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"/></svg>
+                    Build
+                </button>
+            </div>
+            <div class="top-bar-right">
+                <div class="status-indicators">
+                    <div class="indicator" title="VNC Connection">
+                        <span class="indicator-dot connected" id="vncStatus"></span>
+                        <span>VNC</span>
+                    </div>
+                    <div class="indicator" title="Tunnel Status">
+                        <span class="indicator-dot connected" id="tunnelStatus"></span>
+                        <span>Tunnel</span>
+                    </div>
+                </div>
+                <div class="timer" id="sessionTimer">
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
+                    <span id="timerDisplay">--:--:--</span>
+                </div>
+                <button class="btn-icon" id="btnFullscreen" title="Fullscreen">
+                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="15 3 21 3 21 9"/><polyline points="9 21 3 21 3 15"/><line x1="21" y1="3" x2="14" y2="10"/><line x1="3" y1="21" x2="10" y2="14"/></svg>
+                </button>
+            </div>
+        </nav>
+
+        <!-- Main Content -->
+        <main class="main-content">
+            <!-- Desktop Tab (VNC Viewer) -->
+            <section class="tab-content active" id="contentDesktop">
+                <div class="vnc-container">
+                    <div class="vnc-toolbar">
+                        <div class="vnc-toolbar-group">
+                            <button class="vnc-btn" id="btnConnect" title="Connect">
+                                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="5 3 19 12 5 21 5 3"/></svg>
+                                Connect
+                            </button>
+                            <button class="vnc-btn" id="btnDisconnect" title="Disconnect">
+                                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="6" y="4" width="4" height="16"/><rect x="14" y="4" width="4" height="16"/></svg>
+                                Disconnect
+                            </button>
+                        </div>
+                        <div class="vnc-toolbar-group">
+                            <button class="vnc-btn" id="btnCtrlAltDel" title="Send Ctrl+Alt+Delete">⌘⌥⌫</button>
+                            <button class="vnc-btn" id="btnClipboard" title="Clipboard">📋</button>
+                            <select class="vnc-select" id="scaleMode">
+                                <option value="auto">Auto Scale</option>
+                                <option value="none">No Scale</option>
+                                <option value="fit">Fit Window</option>
+                            </select>
+                        </div>
+                        <div class="vnc-toolbar-group">
+                            <span class="vnc-info" id="connectionInfo">Not connected</span>
+                        </div>
+                    </div>
+                    <div class="vnc-screen" id="vncScreen">
+                        <div class="vnc-placeholder" id="vncPlaceholder">
+                            <div class="placeholder-content">
+                                <svg viewBox="0 0 24 24" width="80" height="80" fill="none" stroke="currentColor" stroke-width="1" opacity="0.3">
+                                    <rect x="2" y="3" width="20" height="14" rx="2"/>
+                                    <line x1="8" y1="21" x2="16" y2="21"/>
+                                    <line x1="12" y1="17" x2="12" y2="21"/>
+                                </svg>
+                                <h3>macOS Desktop</h3>
+                                <p>Click <strong>Connect</strong> to start the VNC session</p>
+                                <p class="hint">The noVNC viewer will load here</p>
+                            </div>
+                        </div>
+                        <!-- noVNC iframe will be injected here -->
+                        <iframe id="vncFrame" class="vnc-frame hidden" src="" allow="clipboard-read; clipboard-write"></iframe>
+                    </div>
+                </div>
+            </section>
+
+            <!-- Terminal Tab -->
+            <section class="tab-content" id="contentTerminal">
+                <div class="terminal-container">
+                    <div class="terminal-header">
+                        <div class="terminal-dots">
+                            <span class="dot red"></span>
+                            <span class="dot yellow"></span>
+                            <span class="dot green"></span>
+                        </div>
+                        <span class="terminal-title">runner@mac — bash</span>
+                    </div>
+                    <div class="terminal-body" id="terminalBody">
+                        <div class="terminal-output" id="terminalOutput">
+                            <div class="line">
+                                <span class="prompt">runner@mac ~ %</span>
+                                <span class="text">Welcome to Xcode Remote Studio Terminal</span>
+                            </div>
+                            <div class="line">
+                                <span class="prompt">runner@mac ~ %</span>
+                                <span class="text">xcodebuild -version</span>
+                            </div>
+                            <div class="line output">Xcode 16.2</div>
+                            <div class="line output">Build version 16C5032a</div>
+                            <div class="line">
+                                <span class="prompt">runner@mac ~ %</span>
+                                <span class="text">swift --version</span>
+                            </div>
+                            <div class="line output">Apple Swift version 6.0.3</div>
+                        </div>
+                        <div class="terminal-input-line">
+                            <span class="prompt">runner@mac ~ %</span>
+                            <input type="text" class="terminal-input" id="terminalInput" placeholder="Type a command..." autofocus>
+                        </div>
+                    </div>
+                </div>
+            </section>
+
+            <!-- Files Tab -->
+            <section class="tab-content" id="contentFiles">
+                <div class="files-container">
+                    <div class="files-header">
+                        <h2>📁 Project Files</h2>
+                        <div class="files-actions">
+                            <button class="btn-primary" id="btnNewProject">
+                                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+                                New Project
+                            </button>
+                            <button class="btn-secondary" id="btnRefreshFiles">
+                                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></svg>
+                                Refresh
+                            </button>
+                        </div>
+                    </div>
+                    <div class="file-tree" id="fileTree">
+                        <div class="file-item folder expanded">
+                            <span class="file-icon">📂</span>
+                            <span class="file-name">XcodeProjects</span>
+                        </div>
+                        <div class="file-item folder indent-1">
+                            <span class="file-icon">📂</span>
+                            <span class="file-name">MyiOSApp</span>
+                        </div>
+                        <div class="file-item indent-2">
+                            <span class="file-icon">📄</span>
+                            <span class="file-name">ContentView.swift</span>
+                            <span class="file-size">342 B</span>
+                        </div>
+                        <div class="file-item indent-2">
+                            <span class="file-icon">📄</span>
+                            <span class="file-name">MyiOSApp.swift</span>
+                            <span class="file-size">218 B</span>
+                        </div>
+                        <div class="file-item indent-2">
+                            <span class="file-icon">📦</span>
+                            <span class="file-name">Assets.xcassets</span>
+                        </div>
+                    </div>
+                </div>
+            </section>
+
+            <!-- Build Tab -->
+            <section class="tab-content" id="contentBuild">
+                <div class="build-container">
+                    <div class="build-header">
+                        <h2>🏗️ Build & Run</h2>
+                    </div>
+                    <div class="build-grid">
+                        <div class="build-card">
+                            <div class="build-card-header">
+                                <h3>Quick Build</h3>
+                                <span class="build-status idle" id="buildStatus">Idle</span>
+                            </div>
+                            <div class="build-form">
+                                <div class="form-group">
+                                    <label>Project Path</label>
+                                    <input type="text" id="buildProjectPath" placeholder="MyiOSApp.xcodeproj" class="form-input">
+                                </div>
+                                <div class="form-group">
+                                    <label>Scheme</label>
+                                    <input type="text" id="buildScheme" placeholder="MyiOSApp" class="form-input">
+                                </div>
+                                <div class="form-row">
+                                    <div class="form-group">
+                                        <label>Configuration</label>
+                                        <select id="buildConfig" class="form-select">
+                                            <option>Debug</option>
+                                            <option>Release</option>
+                                        </select>
+                                    </div>
+                                    <div class="form-group">
+                                        <label>Platform</label>
+                                        <select id="buildPlatform" class="form-select">
+                                            <option>iOS Simulator</option>
+                                            <option>macOS</option>
+                                        </select>
+                                    </div>
+                                </div>
+                                <div class="form-group">
+                                    <label>Device</label>
+                                    <select id="buildDevice" class="form-select">
+                                        <option>iPhone 16 Pro</option>
+                                        <option>iPhone 16 Pro Max</option>
+                                        <option>iPhone 16</option>
+                                        <option>iPad Pro 12.9"</option>
+                                    </select>
+                                </div>
+                                <div class="build-actions">
+                                    <button class="btn-build" id="btnBuild">
+                                        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="5 3 19 12 5 21 5 3"/></svg>
+                                        Build & Run
+                                    </button>
+                                    <button class="btn-clean" id="btnClean">🧹 Clean</button>
+                                    <button class="btn-test" id="btnTest">🧪 Test</button>
+                                </div>
+                            </div>
+                        </div>
+                        <div class="build-card">
+                            <div class="build-card-header">
+                                <h3>Build Output</h3>
+                                <button class="btn-sm" id="btnClearLog">Clear</button>
+                            </div>
+                            <div class="build-log" id="buildLog">
+                                <div class="log-line info">Ready to build. Configure your project and click Build & Run.</div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </section>
+        </main>
+
+        <!-- Bottom Status Bar -->
+        <footer class="status-bar">
+            <div class="status-left">
+                <span class="status-item">
+                    <span class="status-dot green"></span>
+                    macOS <span id="macosVersion">14.x</span>
+                </span>
+                <span class="status-item">Xcode <span id="xcodeVersion">16.x</span></span>
+                <span class="status-item">Swift <span id="swiftVersion">6.0</span></span>
+            </div>
+            <div class="status-right">
+                <span class="status-item" id="cpuUsage">CPU: --</span>
+                <span class="status-item" id="memUsage">RAM: --</span>
+                <span class="status-item" id="diskUsage">Disk: --</span>
+            </div>
+        </footer>
+    </div>
+
+    <script src="dashboard.js"></script>
+</body>
+</html>
