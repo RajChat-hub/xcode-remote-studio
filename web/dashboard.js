@@ -144,7 +144,7 @@ document.addEventListener('DOMContentLoaded', () => {
             } else {
                 const errLine = document.createElement('div');
                 errLine.className = 'line output';
-                errLine.textContent = `bash: ${cmd.split(' ')[0]}: command simulated — use VNC Desktop for real terminal`;
+                errLine.textContent = `⚠️ This is a reference panel. Use the Desktop tab → Connect to access the real macOS terminal.`;
                 terminalOutput.appendChild(errLine);
             }
 

@@ -137,14 +137,17 @@ jobs:
       # Step 3: Configure VNC Server
       # =====================================================================
       - name: 🖥️ Configure macOS Screen Sharing (VNC)
-        continue-on-error: true
         run: |
           echo "🖥️ Configuring VNC server..."
           
-          # Set VNC password
           VNC_PASS="${{ github.event.inputs.vnc_password }}"
           
-          # Enable Screen Sharing via kickstart
+          # Step 1: Set the actual macOS user password for 'runner'
+          echo "Setting runner user password..."
+          sudo dscl . -passwd /Users/runner "$VNC_PASS"
+          
+          # Step 2: Enable ARD + VNC legacy mode
+          echo "Enabling Remote Management..."
           sudo /System/Library/CoreServices/RemoteManagement/ARDAgent.app/Contents/Resources/kickstart \
             -activate \
             -configure -access -on \
@@ -152,18 +155,29 @@ jobs:
             -configure -restart -agent -privs -all \
             -configure -clientopts -setvnclegacy -vnclegacy yes \
             -configure -clientopts -setvncpw -vncpw "$VNC_PASS" \
-            || echo "⚠️ ARD kickstart had issues, trying alternate method..."
+            2>&1 || true
           
-          # Also try setting VNC password via defaults
-          echo "$VNC_PASS" | sudo /usr/bin/dscl . -passwd /Users/runner "$VNC_PASS" 2>/dev/null || true
-          
-          # Enable VNC via System Preferences scripting
-          sudo defaults write /var/db/launchd.db/com.apple.launchd/overrides.plist \
-            com.apple.screensharing -dict Disabled -bool false 2>/dev/null || true
-          
+          # Step 3: Enable Screen Sharing via launchctl
+          echo "Enabling Screen Sharing service..."
+          sudo launchctl enable system/com.apple.screensharing 2>/dev/null || true
           sudo launchctl load -w /System/Library/LaunchDaemons/com.apple.screensharing.plist 2>/dev/null || true
           
-          echo "✅ VNC server configured on port $VNC_PORT"
+          # Step 4: Wait and verify VNC is listening
+          sleep 3
+          echo "Verifying VNC server..."
+          if lsof -i :5900 2>/dev/null | grep -q LISTEN; then
+            echo "✅ VNC server is LISTENING on port 5900"
+          else
+            echo "⚠️ VNC not detected on 5900, trying to start manually..."
+            sudo launchctl kickstart -k system/com.apple.screensharing 2>/dev/null || true
+            sleep 2
+            lsof -i :5900 2>/dev/null || echo "⚠️ VNC port 5900 status unknown"
+          fi
+          
+          echo ""
+          echo "📋 VNC Credentials:"
+          echo "   Username: runner"
+          echo "   Password: $VNC_PASS"
 
       - name: 📐 Set Screen Resolution
         continue-on-error: true
