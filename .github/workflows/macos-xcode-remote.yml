@@ -1,8 +1,12 @@
-name: 🍎 macOS Terminal Remote Session
+name: 🍎 macOS Web Terminal Session
 
 on:
   workflow_dispatch:
     inputs:
+      session_duration:
+        description: 'Session Duration (hours)'
+        required: true
+        default: '4'
       xcode_version:
         description: 'Xcode Version (e.g., latest, 15.4)'
         required: true
@@ -10,7 +14,7 @@ on:
 
 jobs:
   macos-terminal:
-    name: 🍎 macOS Terminal Session
+    name: 🍎 macOS Web Terminal
     runs-on: macos-14
     timeout-minutes: 360
 
@@ -18,15 +22,11 @@ jobs:
       - name: 📋 Display System Information
         run: |
           echo "============================================"
-          echo "   🖥️  Xcode Remote Studio - Terminal Mode"
+          echo "   🖥️  Xcode Remote Studio - Web Terminal"
           echo "============================================"
-          echo ""
           echo "🍎 macOS Version: $(sw_vers -productVersion)"
           echo "💻 Hardware: $(sysctl -n hw.model 2>/dev/null || echo 'VM')"
           echo "🧠 CPU: $(sysctl -n machdep.cpu.brand_string)"
-          echo "💾 RAM: $(( $(sysctl -n hw.memsize) / 1073741824 )) GB"
-          echo "💿 Disk: $(df -h / | tail -1 | awk '{print $4}') free"
-          echo ""
           echo "============================================"
 
       - name: 📦 Checkout Repository
@@ -35,20 +35,97 @@ jobs:
       - name: 🔧 Select Xcode Version
         run: |
           if [ "${{ github.event.inputs.xcode_version }}" = "latest" ]; then
-            echo "Using default (latest) Xcode installation: $(xcode-select -p)"
+            echo "Using default (latest) Xcode installation"
           else
             XCODE_PATH="/Applications/Xcode_${{ github.event.inputs.xcode_version }}.app"
             if [ -d "$XCODE_PATH" ]; then
               sudo xcode-select -s "$XCODE_PATH/Contents/Developer"
               echo "✅ Switched to Xcode ${{ github.event.inputs.xcode_version }}"
-            else
-              echo "⚠️ Xcode version ${{ github.event.inputs.xcode_version }} not found. Using default."
             fi
           fi
-          echo "Current Xcode version:"
           xcodebuild -version
 
-      - name: 🚀 Start Terminal Session (tmate)
-        uses: mxschmitt/action-tmate@v3
-        with:
-          limit-access-to-actor: false
+      - name: 📥 Install Dependencies (ttyd & cloudflared)
+        run: |
+          echo "📥 Installing ttyd for web terminal..."
+          brew install --quiet ttyd
+          
+          echo "📥 Installing cloudflared for tunnel..."
+          brew install --quiet cloudflare/cloudflare/cloudflared
+          
+          echo "✅ Dependencies installed"
+
+      - name: 🌐 Start Web Terminal & Tunnel
+        run: |
+          # Start ttyd (web terminal) on port 8080 running bash
+          echo "Starting ttyd..."
+          ttyd -p 8080 -W bash > ttyd.log 2>&1 &
+          TTYD_PID=$!
+          echo "TTYD_PID=$TTYD_PID" >> $GITHUB_ENV
+          
+          sleep 2
+          
+          # Start Cloudflare Tunnel
+          echo "Starting Cloudflare Tunnel..."
+          cloudflared tunnel --no-autoupdate --url http://localhost:8080 > tunnel.log 2>&1 &
+          TUNNEL_PID=$!
+          echo "TUNNEL_PID=$TUNNEL_PID" >> $GITHUB_ENV
+          
+          sleep 8
+          
+          # Extract Tunnel URL
+          TUNNEL_URL=$(grep -o 'https://.*\.trycloudflare\.com' tunnel.log | head -n 1)
+          if [ -z "$TUNNEL_URL" ]; then
+            echo "⚠️ Could not extract tunnel URL. Checking logs:"
+            cat tunnel.log
+          fi
+          echo "TUNNEL_URL=$TUNNEL_URL" >> $GITHUB_ENV
+
+      - name: 📊 Display Session Summary
+        run: |
+          echo ""
+          echo "╔══════════════════════════════════════════════════════════╗"
+          echo "║          🖥️  macOS Web Terminal - SESSION ACTIVE         ║"
+          echo "╠══════════════════════════════════════════════════════════╣"
+          echo "║                                                          ║"
+          echo "║  🌐 Terminal URL: ${TUNNEL_URL:-'Not found, check logs'} ║"
+          echo "║  📱 Xcode: $(xcodebuild -version | head -1)             ║"
+          echo "║  ⏱️  Duration: ${{ github.event.inputs.session_duration }} hours ║"
+          echo "║                                                          ║"
+          echo "╚══════════════════════════════════════════════════════════╝"
+          echo ""
+
+      - name: ⏳ Keep Session Alive
+        run: |
+          DURATION_HOURS=${{ github.event.inputs.session_duration }}
+          DURATION_SECONDS=$((DURATION_HOURS * 3600))
+          END_TIME=$(($(date +%s) + DURATION_SECONDS))
+          
+          echo "⏳ Session will remain active for $DURATION_HOURS hours"
+          
+          COUNTER=0
+          while [ $(date +%s) -lt $END_TIME ]; do
+            REMAINING=$(( (END_TIME - $(date +%s)) / 60 ))
+            
+            if [ $((COUNTER % 12)) -eq 0 ]; then
+              echo "[$(date '+%H:%M:%S')] 💚 Session active | ⏱️ ${REMAINING} min remaining | 🌐 ${TUNNEL_URL}"
+            fi
+            
+            # Health checks every 5 minutes
+            if [ $((COUNTER % 1)) -eq 0 ]; then
+              if ! kill -0 $TTYD_PID 2>/dev/null; then
+                echo "[$(date '+%H:%M:%S')] ⚠️ ttyd died, restarting..."
+                ttyd -p 8080 -W bash > ttyd.log 2>&1 &
+                TTYD_PID=$!
+              fi
+              
+              if ! kill -0 $TUNNEL_PID 2>/dev/null; then
+                echo "[$(date '+%H:%M:%S')] ⚠️ Tunnel died, restarting..."
+                cloudflared tunnel --no-autoupdate --url http://localhost:8080 > tunnel.log 2>&1 &
+                TUNNEL_PID=$!
+              fi
+            fi
+            
+            COUNTER=$((COUNTER + 1))
+            sleep 300
+          done
