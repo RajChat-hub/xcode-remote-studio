@@ -43,6 +43,27 @@ jobs:
               echo "✅ Switched to Xcode ${{ github.event.inputs.xcode_version }}"
             fi
           fi
+          echo "Accepting Xcode license..."
+          sudo xcodebuild -license accept || true
+          
+          # Setup a helpful bash profile for the web terminal
+          cat << 'EOF' > $HOME/.bashrc
+          alias xcode="echo '⚠️ Xcode is a GUI app. In terminal, use: xcodebuild (to build), xcrun (to run tools), or xed (to edit files).'"
+          export PS1="\[\e[32m\]macOS-Terminal\[\e[m\]:\[\e[34m\]\w\[\e[m\]$ "
+          echo "============================================"
+          echo "   🍎 Xcode Terminal Environment Ready      "
+          echo "============================================"
+          echo " Xcode version: $(xcodebuild -version | head -1)"
+          echo " Tip: Type 'xcodebuild' to compile your iOS projects."
+          echo "============================================"
+          EOF
+          
+          cat << 'EOF' > $HOME/.bash_profile
+          if [ -f ~/.bashrc ]; then
+            source ~/.bashrc
+          fi
+          EOF
+          
           xcodebuild -version
 
       - name: 📥 Install Dependencies (ttyd & cloudflared)
@@ -59,7 +80,7 @@ jobs:
         run: |
           # Start ttyd (web terminal) on port 8080 running bash
           echo "Starting ttyd..."
-          ttyd -p 8080 -W bash > ttyd.log 2>&1 &
+          ttyd -p 8080 -W bash --login > ttyd.log 2>&1 &
           TTYD_PID=$!
           echo "TTYD_PID=$TTYD_PID" >> $GITHUB_ENV
           
